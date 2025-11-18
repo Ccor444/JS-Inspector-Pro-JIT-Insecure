@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>JS Inspector Pro — JIT Insecure Dev (Material)</title>
+
+<!-- Highlight & Acorn -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css">
+<script src="https://unpkg.com/acorn@8.11.1/dist/acorn.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+
+<style>
+  :root{
+    --bg:#f5f5f5; --card:#ffffff; --muted:#6b7280; --accent:#1a73e8; --danger:#d93025;
+    --mono: "Roboto Mono", monospace;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);font-family:Inter,Roboto,Arial,sans-serif;color:#111}
+  .app{max-width:1280px;margin:18px auto;padding:18px;display:grid;grid-template-columns:1fr;gap:14px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .brand{display:flex;gap:12px;align-items:center}
+  .logo{width:44px;height:44px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#2a6ef6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px}
+  h1{margin:0;font-size:18px}
+  .toolbar{display:flex;gap:8px;align-items:center}
+  .btn{background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;border:0;cursor:pointer;font-weight:600}
+  .btn.ghost{background:transparent;color:var(--accent);border:1px solid rgba(26,115,232,.12)}
+  .btn.danger{background:var(--danger);color:#fff}
+  .row{display:flex;gap:12px;align-items:center}
+  main{display:grid;grid-template-columns:420px 1fr;gap:14px}
+  .panel{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 20px rgba(16,24,40,.06)}
+  .panel.small{padding:8px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  textarea#code{width:100%;height:360px;border:1px solid #e6edf3;border-radius:8px;padding:12px;font-family:var(--mono);font-size:13px;resize:vertical;background:#0b1220;color:#dff3ff}
+  .lists{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .list{max-height:280px;overflow:auto;padding:8px;border-radius:8px;background:#f7f9fc;border:1px solid #eef3fb}
+  .item{padding:8px;border-radius:6px;background:linear-gradient(180deg,#ffffff,#f8fbff);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;font-size:13px}
+  pre.hljs{max-height:200px;overflow:auto;border-radius:6px;padding:12px}
+  footer{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  .toggle{display:inline-flex;align-items:center;gap:8px;padding:6px;border-radius:8px;background:linear-gradient(180deg,#fff,#f7fbff);border:1px solid #eef3fb}
+  .warning{background:#fff6f6;border:1px solid #ffd6d6;color:var(--danger);padding:10px;border-radius:8px;font-weight:600}
+  .muted{color:var(--muted);font-size:13px}
+  .small{font-size:12px;color:var(--muted)}
+  .exec-controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .config{display:flex;gap:6px;align-items:center}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div class="logo">JI</div>
+      <div>
+        <h1>JS Inspector Pro — JIT Insecure</h1>
+        <div class="small muted">Modo Dev • JIT • Unsafe options</div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="controls">
+       <div class="toolbar">
+      <div class="controls">
+        <button class="btn" id="btn-scan">Scan</button>
+        <button class="btn ghost" id="btn-clear">Clear</button>
+        <button class="btn ghost" id="btn-example">Load Example</button>
+        
+        <button class="btn ghost" id="btn-import-url">Import URL</button> 
+        
+        <button class="btn ghost" id="btn-import">Import .js</button>
+      </div>
+
+      <div class="config">
+        <label class="toggle"><input id="jitToggle" type="checkbox"> JIT (live)</label>
+        <label class="toggle"><input id="unsafeToggle" type="checkbox"> Unsafe Exec</label>
+      </div>
+</div>
+
+  </header>
+
+  <main>
+    <!-- Editor + exec -->
+    <section class="panel">
+      <label for="code">Editor (main.js)</label>
+      <textarea id="code" spellcheck="false">// Cole ou importe seu main.js aqui</textarea>
+
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+        <button class="btn" id="btn-run-iframe">Run (iframe sandbox)</button>
+        <button class="btn ghost" id="btn-run-eval">Run (eval)</button>
+        <button class="btn danger" id="btn-bind-unsafe">Bind → window (UNSAFE)</button>
+      </div>
+
+      <div class="exec-controls">
+        <button class="btn ghost" id="btn-export-json">Export JSON</button>
+        <button class="btn ghost" id="btn-copy-json">Copy JSON</button>
+        <div class="small muted" style="margin-left:auto">Engine: <span id="engineLabel">acorn|regex</span></div>
+      </div>
+
+      <div style="margin-top:12px" class="warning">
+        AVISO: Unsafe Execution faz eval() / bind ao window. Não execute código desconhecido.
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section class="panel">
+      <div style="display:flex;gap:10px;align-items:center;justify-content:space-between">
+        <div>
+          <label class="small">Search</label>
+          <input id="q" placeholder="buscar..." style="padding:8px;border-radius:8px;border:1px solid #e6eef3" />
+        </div>
+        <div class="small muted">AST powered by Acorn</div>
+      </div>
+
+      <div style="margin-top:10px" class="lists">
+        <div>
+          <label class="small">Classes</label>
+          <div id="classes" class="list"></div>
+
+          <label class="small" style="margin-top:8px">Functions</label>
+          <div id="functions" class="list"></div>
+        </div>
+
+        <div>
+          <label class="small">Globals</label>
+          <div id="globals" class="list"></div>
+
+          <label class="small" style="margin-top:8px">DOM IDs</label>
+          <div id="domids" class="list"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <label class="small">AST Preview</label>
+        <pre id="ast" class="hljs"></pre>
+      </div>
+
+      <div style="margin-top:10px">
+        <label class="small">Execution Sandbox / Detected functions</label>
+        <pre id="exec" class="hljs">(vazio)</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="panel small">
+    <div style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+      <div class="muted">JIT Insecure Dev • Use com responsabilidade</div>
+      <div class="muted">Built for power users</div>
+    </div>
+  </footer>
+</div>
+
+<input type="file" id="filePicker" accept=".js" style="display:none">
+
+<!-- Load project modules (your scanner modules) -->
+<script type="module">
+/* ============================
+   Imports (relative modules)
+   ============================ */
+import { runScanner as coreRunScanner } from './scanner.js';
+import { scanClasses } from './scanner-classes.js';
+import { scanFunctions } from './scanner-functions.js';
+import { scanGlobals } from './scanner-globals.js';
+import { scanDom } from './scanner-dom.js';
+import {
+  analyzeExecutableFunctions,
+  analyzeFunctionAttributes,
+  createSmartSandbox, // corrigido
+  generateDeepReport
+} from './scriptTest.js';
+
+// 💡 ADICIONE ESTA NOVA LINHA:
+import { exportJson, copyJson } from './ui-utils.js'; 
+
+/* ============================
+   Helpers & UI bindings
+   ============================ */
+const $ = id => document.getElementById(id);
+const codeEl = $('code');
+const classesEl = $('classes');
+const functionsEl = $('functions');
+const globalsEl = $('globals');
+const domidsEl = $('domids');
+const astEl = $('ast');
+const execEl = $('exec');
+const qEl = $('q');
+const engineLabel = $('engineLabel');
+
+let lastScan = null;
+let jitTimer = null;
+
+function safeStringify(v){ try { return JSON.stringify(v, null, 2); } catch(e){ return String(v); } }
+
+function renderList(el, list, formatter=(x)=>JSON.stringify(x)) {
+  if (!list || !list.length) { el.innerHTML = '<div class="muted small">Nenhum item</div>'; return; }
+  el.innerHTML = list.map(item => `<div class="item"><div>${escapeHtml(item.name || item.id || (item || ''))}</div><div class="small muted">${item.loc?('ln '+(item.loc.line||item.loc.start?.line)):''}</div></div>`).join('');
+}
+
+function escapeHtml(s){ if (s==null) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+
+// 💡 FUNÇÃO DE IMPORTAÇÃO POR URL (Avançada com Feedback Visual)
+async function importUrl() {
+  const url = prompt("Cole a URL do arquivo JS para importar:");
+  if (!url) return;
+
+  // 1. Obter a referência e salvar o texto original do botão
+  const btn = $('btn-import-url');
+  const originalText = btn.textContent;
+  
+  // 2. Aplicar feedback visual
+  btn.disabled = true;
+  btn.textContent = 'Carregando...';
+
+  try {
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      throw new Error(`Erro ao buscar: Status ${response.status} (${response.statusText})`);
+    }
+
+    const code = await response.text();
+    codeEl.value = code; // Define o código no editor
+    
+    // Roda a análise automaticamente
+    scanAndRender(); 
+    
+    alert(`Código de ${url} importado com sucesso!`);
+
+  } catch (error) {
+    console.error("Erro na importação da URL:", error);
+    alert(`Falha ao importar a URL:\n${error.message}\n\nNota: Pode ser erro de CORS/Permissão.`);
+  } finally {
+    // 3. O bloco finally garante que o botão seja reabilitado, mesmo em caso de erro.
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+
+/* ============================
+   Main scan function (AST preferred)
+   ============================ */
+async function scanAndRender() {
+  const code = codeEl.value || '';
+  if (!code.trim()) return;
+
+  let result;
+  try {
+    result = coreRunScanner ? coreRunScanner(code) : null;
+  } catch (e) {
+    console.warn('core scanner error', e);
+    result = null;
+  }
+
+  if (result && result.success && result.engine==='acorn') {
+    engineLabel.textContent = 'acorn';
+    lastScan = result.result;
+    renderList(classesEl, lastScan.classes);
+    renderList(functionsEl, lastScan.functions);
+    renderList(globalsEl, lastScan.globals);
+    renderList(domidsEl, lastScan.domIds);
+    astEl.textContent = JSON.stringify(result.ast.type ? {type: result.ast.type, body: result.ast.body?.slice(0,6)} : result.ast, null, 2);
+    hljs.highlightElement(astEl);
+  } else {
+    engineLabel.textContent = 'regex';
+    const classes = scanClasses(code);
+    const funcs = scanFunctions(code);
+    const globals = scanGlobals(code);
+    const dom = scanDom(code);
+
+    lastScan = { classes, functions: funcs, globals, domIds: dom };
+    renderList(classesEl, classes);
+    renderList(functionsEl, funcs);
+    renderList(globalsEl, globals);
+    renderList(domidsEl, dom);
+
+    astEl.textContent = 'AST not available (regex fallback)';
+  }
+
+  // analyze exec functions
+  const execList = analyzeExecutableFunctions(code);
+  const attrs = (typeof analyzeFunctionAttributes === 'function') ? analyzeFunctionAttributes(code, execList.map(n=>({name:n,type:'func',params:[]}))) : [];
+  const sandbox = createSmartSandbox(attrs.length?attrs:execList.map(n=>({name:n}))); // <— corrigido
+  window.testFunctions = sandbox;
+  execEl.textContent = safeStringify(execList);
+  hljs.highlightElement(execEl);
+  console.info('scan result', lastScan);
+  return lastScan;
+}
+
+/* ============================
+   JIT (live) wiring
+   ============================ */
+function enableJIT(enabled){
+  if (jitTimer) { clearTimeout(jitTimer); jitTimer = null; }
+  if (enabled) {
+    codeEl.addEventListener('input', onCodeInput);
+  } else {
+    codeEl.removeEventListener('input', onCodeInput);
+  }
+}
+function onCodeInput(){
+  if (jitTimer) clearTimeout(jitTimer);
+  jitTimer = setTimeout(()=>{ scanAndRender(); if ($('unsafeToggle').checked) runEval(codeEl.value); }, 400);
+}
+
+/* ============================
+   Execution modes
+   ============================ */
+function runInIframe(code){
+  const iframe = document.createElement('iframe');
+  iframe.style.width='0'; iframe.style.height='0'; iframe.style.position='absolute'; iframe.style.left='-9999px';
+  iframe.setAttribute('sandbox','allow-scripts');
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(`<script>try{ ${code} }catch(e){ parent.postMessage({__JS_INSPECTOR_ERROR__:String(e)}, '*') }<\/script>`);
+  doc.close();
+  setTimeout(()=>{ try{ document.body.removeChild(iframe);}catch(e){} },8000);
+}
+
+function runEval(code){
+  try {
+    const res = (0,eval)(code);
+    console.info('eval result', res);
+    alert('Eval executed (check console).');
+  } catch(e) {
+    alert('Eval error: '+e);
+  }
+}
+
+function bindUnsafe(code){
+  if (!confirm('CONFIRM: bind unsafe to window? This will execute code and possibly attach to global window.')) return;
+  try {
+    const fn = new Function(code + '\nreturn typeof module !== "undefined" ? module.exports : null;');
+    const out = fn();
+    console.warn('Unsafe bind output', out);
+    alert('Unsafe executed — check console.');
+  } catch(e){ alert('Unsafe execution error: '+e); }
+}
+/* ============================
+   UI events wiring
+   ============================ */
+
+/**
+ * Inicializa todos os event listeners da UI.
+ */
+function initAppListeners() {
+    // 1. Ações Principais (Scan, Clear, Example, Import)
+    $('btn-scan').addEventListener('click', () => { scanAndRender(); });
+    $('btn-clear').addEventListener('click', () => { codeEl.value = ''; scanAndRender(); execEl.textContent = '(vazio)'; });
+    $('btn-example').addEventListener('click', () => {
+        codeEl.value = `class Player{constructor(n){this.n=n}}\nfunction start(){console.log('start')}\nconst tick=()=>{}\nlet g=0\ndocument.getElementById('app')\n`;
+        scanAndRender();
+    });
+
+    // 2. Importação e Exportação (Botões de Arquivo/Dados)
+    $('btn-import-url').addEventListener('click', importUrl);
+    $('btn-import').addEventListener('click', () => $('filePicker').click());
+    
+    // Listener do File Picker (Upload de arquivo local)
+    $('filePicker').addEventListener('change', (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const r = new FileReader();
+        r.onload = ev => { codeEl.value = ev.target.result; scanAndRender(); };
+        r.readAsText(f);
+    });
+
+    // 💡 LISTENERS PARA EXPORT/COPY (Integrado do ui-utils.js)
+    $('btn-export-json').addEventListener('click', () => {
+        if (!lastScan) return alert('Execute um Scan primeiro para gerar dados.');
+        exportJson(lastScan, 'js_inspector_report.json', safeStringify);
+    });
+
+    $('btn-copy-json').addEventListener('click', () => {
+        if (!lastScan) return alert('Execute um Scan primeiro para gerar dados.');
+        copyJson(lastScan, safeStringify);
+    });
+
+    // 3. Modos de Execução (Sandbox)
+    $('btn-run-iframe').addEventListener('click', () => runInIframe(codeEl.value));
+    $('btn-run-eval').addEventListener('click', () => {
+        if ($('unsafeToggle').checked) { if (!confirm('Unsafe Eval enabled — continue?')) return; }
+        runEval(codeEl.value);
+    });
+    $('btn-bind-unsafe').addEventListener('click', () => bindUnsafe(codeEl.value));
+
+    // 4. Toggles e Configurações de Modo
+    $('jitToggle').addEventListener('change', (e) => enableJIT(e.target.checked));
+    $('unsafeToggle').addEventListener('change', () => {
+        if ($('unsafeToggle').checked) { if (!confirm('Enable Unsafe Mode?')) $('unsafeToggle').checked = false; }
+    });
+
+    // 5. Pesquisa (Input Filter)
+    qEl.addEventListener('input', () => {
+        const q = qEl.value.trim().toLowerCase();
+        if (!lastScan) return;
+        const filter = arr => arr.filter(i => (i.name || i.id || '').toString().toLowerCase().includes(q));
+        renderList(classesEl, filter(lastScan.classes || []));
+        renderList(functionsEl, filter(lastScan.functions || []));
+        renderList(globalsEl, filter(lastScan.globals || []));
+        renderList(domidsEl, filter(lastScan.domIds || lastScan.dom || []));
+    });
+
+    // 6. Atalhos de Teclado
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter') scanAndRender();
+        if (e.ctrlKey && e.key === 'b') { $('unsafeToggle').checked = !$('unsafeToggle').checked; }
+    });
+}
+
+/**
+ * Inicializa a aplicação: Liga os listeners e faz o primeiro scan.
+ */
+function initApp() {
+    initAppListeners(); // Liga todos os eventos
+    
+    // Tenta fazer o primeiro scan do código padrão/exemplo.
+    // Usando .then/catch para melhor tratamento de erros assíncronos
+    scanAndRender()
+        .then(() => console.log("JS Inspector carregado e pronto."))
+        .catch(e => console.warn("Erro no scan inicial (pode ser normal se o código estiver vazio):", e));
+}
+
+// 💥 Chamada final de inicialização, que substitui a linha solta `scanAndRender().catch(()=>{});`
+initApp(); 
+
+/* ============================
+   UI events wiring (Adicionar ao final da seção)
+   ============================ */
+
+// ... (Outros listeners existentes, como btn-scan, btn-clear, etc.)
+
+// NOVOS LISTENERS PARA EXPORT/COPY:
+$('btn-export-json').addEventListener('click', () => {
+    if (!lastScan) return alert('Execute um Scan primeiro para gerar dados.');
+    // Passamos safeStringify para o módulo ui-utils.js
+    exportJson(lastScan, 'js_inspector_report.json', safeStringify); 
+});
+
+$('btn-copy-json').addEventListener('click', () => {
+    if (!lastScan) return alert('Execute um Scan primeiro para gerar dados.');
+    // Passamos safeStringify para o módulo ui-utils.js
+    copyJson(lastScan, safeStringify);
+});
+</script>
+</body>
+</html>
