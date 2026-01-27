@@ -1,29 +1,17 @@
-// src/scanner/scanner.js
-// ES module — Orquestrador e coletores principais do scanner
-// Usa Acorn (se disponível no ambiente) para gerar AST; tem fallback por regex.
-// Exports: runScanner, scanClasses, scanFunctions, scanGlobals, scanDom
-
-// USO:
-// import { runScanner } from './scanner.js';
-// const result = runScanner(code); // { ast, classes, functions, arrows, globals, domIds, imports, exports }
 
 const DEFAULT_OPTIONS = {
-  useAcorn: true,     // tenta usar acorn.parse se presente
+  useAcorn: true,
   ecmaVersion: 'latest',
   sourceType: 'module',
   includeLocations: true,
-  regexFallback: true // se parser falhar, tenta análise por regex
+  regexFallback: true,
+  securityScan: true // Nova opção para análise de segurança
 };
 
 // Utility: safe access to acorn
 function getAcorn() {
   if (typeof window !== 'undefined' && window.acorn) return window.acorn;
   try {
-    // In Node, user may have acorn installed
-    // NOTE: dynamic require only works in CommonJS; we try-catch for safety.
-    // If running as pure ES module in Node, user should provide acorn via global or pre-import.
-    // We avoid throwing if not present.
-    // eslint-disable-next-line no-undef
     if (typeof require === 'function') {
       return require('acorn');
     }
@@ -49,53 +37,154 @@ function walk(node, visitors, parent = null) {
   }
 }
 
+// Nova função: Detectar vulnerabilidades de segurança
+function detectSecurityVulnerabilities(ast, sourceCode) {
+  const vulnerabilities = [];
+  
+  const securityVisitors = {
+    CallExpression(node) {
+      // Detectar eval()
+      if (node.callee && node.callee.type === 'Identifier' && node.callee.name === 'eval') {
+        vulnerabilities.push({
+          type: 'EVAL_USAGE',
+          severity: 'CRITICAL',
+          description: 'eval() permite execução arbitrária de código',
+          location: node.loc,
+          mitigation: 'Substituir por JSON.parse() ou evitar completamente'
+        });
+      }
+      
+      // Detectar new Function()
+      if (node.callee && 
+          node.callee.type === 'NewExpression' && 
+          node.callee.callee && 
+          node.callee.callee.name === 'Function') {
+        vulnerabilities.push({
+          type: 'FUNCTION_CONSTRUCTOR',
+          severity: 'HIGH',
+          description: 'Function constructor similar a eval()',
+          location: node.loc,
+          mitigation: 'Evitar construtores dinâmicos de função'
+        });
+      }
+      
+      // Detectar innerHTML assignments
+      if (node.callee && node.callee.type === 'MemberExpression') {
+        if (node.callee.property && 
+            (node.callee.property.name === 'innerHTML' || 
+             node.callee.property.name === 'outerHTML')) {
+          vulnerabilities.push({
+            type: 'INNERHTML_ASSIGNMENT',
+            severity: 'HIGH',
+            description: 'innerHTML/outerHTML pode causar XSS',
+            location: node.loc,
+            mitigation: 'Usar textContent ou sanitizar com DOMPurify'
+          });
+        }
+      }
+    },
+    
+    AssignmentExpression(node) {
+      // Detectar prototype pollution
+      if (node.left && 
+          node.left.type === 'MemberExpression' &&
+          node.left.property &&
+          (node.left.property.name === '__proto__' || 
+           node.left.property.name === 'constructor' ||
+           node.left.property.name === 'prototype')) {
+        vulnerabilities.push({
+          type: 'PROTOTYPE_POLLUTION',
+          severity: 'CRITICAL',
+          description: 'Manipulação de prototype pode levar a RCE',
+          location: node.loc,
+          mitigation: 'Validar objetos antes de manipular prototypes'
+        });
+      }
+    },
+    
+    TemplateLiteral(node) {
+      // Detectar possíveis SQL injection patterns
+      const templateText = sourceCode.slice(node.start, node.end);
+      if (templateText.includes('SELECT') && 
+          templateText.includes('${') &&
+          !templateText.includes('?')) {
+        vulnerabilities.push({
+          type: 'SQL_INJECTION_PATTERN',
+          severity: 'HIGH',
+          description: 'Template strings em queries podem causar SQL Injection',
+          location: node.loc,
+          mitigation: 'Usar prepared statements ou query builders'
+        });
+      }
+    }
+  };
+  
+  walk(ast, securityVisitors);
+  return vulnerabilities;
+}
+
 /* -------------------------
    CORE COLLECTORS (AST)
    ------------------------- */
-function collectFromAST(ast) {
+function collectFromAST(ast, sourceCode, options) {
   const res = {
-    classes: [],     // { name, loc }
-    functions: [],   // { name, loc }
-    arrows: [],      // { name, loc }
-    globals: [],     // { name, kind, loc }  kind: var|let|const|assignment
-    domIds: [],      // { id, loc }
-    imports: [],     // strings
-    exports: [],     // strings
-    ast // include AST for reference
+    classes: [],
+    functions: [],
+    arrows: [],
+    globals: [],
+    domIds: [],
+    imports: [],
+    exports: [],
+    vulnerabilities: [],
+    ast
   };
 
   const visitors = {
     ClassDeclaration(node) {
-      res.classes.push({ name: node.id ? node.id.name : '(anonymous)', loc: node.loc && node.loc.start ? node.loc.start : null });
+      res.classes.push({ 
+        name: node.id ? node.id.name : '(anonymous)', 
+        loc: node.loc && node.loc.start ? node.loc.start : null 
+      });
+      
       // collect methods
       if (node.body && node.body.body) {
         for (const m of node.body.body) {
           if (m.type === 'MethodDefinition') {
             const methodName = (m.key && (m.key.name || (m.key.value))) || '(computed)';
-            res.functions.push({ name: `${node.id ? node.id.name : '(class)'}::${methodName}`, loc: m.loc && m.loc.start ? m.loc.start : null, method: true });
+            res.functions.push({ 
+              name: `${node.id ? node.id.name : '(class)'}::${methodName}`, 
+              loc: m.loc && m.loc.start ? m.loc.start : null, 
+              method: true 
+            });
           }
         }
       }
     },
 
     FunctionDeclaration(node) {
-      if (node.id && node.id.name) res.functions.push({ name: node.id.name, loc: node.loc && node.loc.start ? node.loc.start : null });
+      if (node.id && node.id.name) res.functions.push({ 
+        name: node.id.name, 
+        loc: node.loc && node.loc.start ? node.loc.start : null 
+      });
     },
 
     VariableDeclaration(node) {
-      // Note: we do not try to perfectly decide scope here in this collector;
-      // more advanced scope analysis would be required to only list true top-level globals.
       for (const decl of node.declarations || []) {
-        // simple identifier
         if (decl.id && decl.id.type === 'Identifier') {
           const name = decl.id.name;
           if (decl.init && decl.init.type === 'ArrowFunctionExpression') {
-            res.arrows.push({ name, loc: decl.loc && decl.loc.start ? decl.loc.start : null });
+            res.arrows.push({ 
+              name, 
+              loc: decl.loc && decl.loc.start ? decl.loc.start : null 
+            });
           } else {
-            res.globals.push({ name, kind: node.kind, loc: decl.loc && decl.loc.start ? decl.loc.start : null });
+            res.globals.push({ 
+              name, 
+              kind: node.kind, 
+              loc: decl.loc && decl.loc.start ? decl.loc.start : null 
+            });
           }
         }
-        // skip patterns (destructuring) for now
       }
     },
 
@@ -105,12 +194,21 @@ function collectFromAST(ast) {
         const obj = node.left.object;
         const prop = node.left.property;
         if (obj && obj.type === 'Identifier' && (obj.name === 'window' || obj.name === 'globalThis')) {
-          res.globals.push({ name: prop && (prop.name || prop.value) || '(computed)', kind: 'assignment', loc: node.loc && node.loc.start ? node.loc.start : null });
+          res.globals.push({ 
+            name: prop && (prop.name || prop.value) || '(computed)', 
+            kind: 'assignment', 
+            loc: node.loc && node.loc.start ? node.loc.start : null 
+          });
         }
       }
+      
       // capture plain assignment to identifier at top-level (simple heuristic)
       if (node.left && node.left.type === 'Identifier') {
-        res.globals.push({ name: node.left.name, kind: 'assignment', loc: node.left.loc && node.left.loc.start ? node.left.loc.start : null });
+        res.globals.push({ 
+          name: node.left.name, 
+          kind: 'assignment', 
+          loc: node.left.loc && node.left.loc.start ? node.loc.start : null 
+        });
       }
     },
 
@@ -124,9 +222,15 @@ function collectFromAST(ast) {
           const arg = node.arguments && node.arguments[0];
           if (arg) {
             if (arg.type === 'Literal') {
-              res.domIds.push({ id: arg.value, loc: node.loc && node.loc.start ? node.loc.start : null });
+              res.domIds.push({ 
+                id: arg.value, 
+                loc: node.loc && node.loc.start ? node.loc.start : null 
+              });
             } else if (arg.type === 'TemplateLiteral' && arg.quasis && arg.quasis[0]) {
-              res.domIds.push({ id: arg.quasis[0].value.raw, loc: node.loc && node.loc.start ? node.loc.start : null });
+              res.domIds.push({ 
+                id: arg.quasis[0].value.raw, 
+                loc: node.loc && node.loc.start ? node.loc.start : null 
+              });
             }
           }
         }
@@ -151,8 +255,12 @@ function collectFromAST(ast) {
 
   try {
     walk(ast, visitors);
+    
+    // Adicionar análise de segurança se habilitado
+    if (options.securityScan) {
+      res.vulnerabilities = detectSecurityVulnerabilities(ast, sourceCode);
+    }
   } catch (e) {
-    // shouldn't happen, but keep safe
     console.warn('collector walk error', e);
   }
 
@@ -161,7 +269,6 @@ function collectFromAST(ast) {
 
 /* -------------------------
    REGEX FALLBACK COLLECTORS
-   (less precise, kept for environments without acorn)
    ------------------------- */
 function scanClassesByRegex(code) {
   const results = [];
@@ -218,6 +325,62 @@ function scanDomByRegex(code) {
   return results;
 }
 
+// Nova função: Detectar vulnerabilidades por regex (fallback)
+function detectVulnerabilitiesByRegex(code) {
+  const vulnerabilities = [];
+  
+  // Detectar eval()
+  const evalRe = /eval\s*\([^)]*\)/g;
+  let m;
+  while ((m = evalRe.exec(code)) !== null) {
+    vulnerabilities.push({
+      type: 'EVAL_USAGE',
+      severity: 'CRITICAL',
+      description: 'eval() permite execução arbitrária de código',
+      index: m.index,
+      mitigation: 'Substituir por JSON.parse() ou evitar completamente'
+    });
+  }
+  
+  // Detectar new Function()
+  const funcRe = /new\s+Function\s*\(/g;
+  while ((m = funcRe.exec(code)) !== null) {
+    vulnerabilities.push({
+      type: 'FUNCTION_CONSTRUCTOR',
+      severity: 'HIGH',
+      description: 'Function constructor similar a eval()',
+      index: m.index,
+      mitigation: 'Evitar construtores dinâmicos de função'
+    });
+  }
+  
+  // Detectar innerHTML
+  const innerHtmlRe = /\.innerHTML\s*=/g;
+  while ((m = innerHtmlRe.exec(code)) !== null) {
+    vulnerabilities.push({
+      type: 'INNERHTML_ASSIGNMENT',
+      severity: 'HIGH',
+      description: 'innerHTML pode causar XSS',
+      index: m.index,
+      mitigation: 'Usar textContent ou sanitizar com DOMPurify'
+    });
+  }
+  
+  // Detectar hardcoded secrets (padrões simples)
+  const secretRe = /['"`](?:[A-Za-z0-9+/]{40,}|[A-Fa-f0-9]{64,}|sk_live_[A-Za-z0-9]{24,})['"`]/g;
+  while ((m = secretRe.exec(code)) !== null) {
+    vulnerabilities.push({
+      type: 'HARDCODED_SECRET',
+      severity: 'CRITICAL',
+      description: 'Possível segredo/chave de API hardcoded',
+      index: m.index,
+      mitigation: 'Mover para variáveis de ambiente ou secret manager'
+    });
+  }
+  
+  return vulnerabilities;
+}
+
 /* -------------------------
    PUBLIC API
    ------------------------- */
@@ -234,7 +397,6 @@ export function runScanner(code, opts = {}) {
   // Try AST parse if acorn present
   if (acorn) {
     try {
-      // acorn.parse may be available under different names in some builds (acorn.parse)
       const parseOpts = {
         ecmaVersion: options.ecmaVersion === 'latest' ? 'latest' : options.ecmaVersion,
         sourceType: options.sourceType || 'module',
@@ -242,14 +404,22 @@ export function runScanner(code, opts = {}) {
         ranges: false
       };
       const ast = acorn.parse(code, parseOpts);
-      const collected = collectFromAST(ast);
-      return { success: true, engine: 'acorn', ast, result: collected };
+      const collected = collectFromAST(ast, code, options);
+      return { 
+        success: true, 
+        engine: 'acorn', 
+        ast, 
+        result: collected,
+        security: {
+          vulnerabilities: collected.vulnerabilities,
+          vulnerabilityCount: collected.vulnerabilities.length,
+          criticalCount: collected.vulnerabilities.filter(v => v.severity === 'CRITICAL').length
+        }
+      };
     } catch (err) {
-      // parsing failed: fall back to regex if allowed
       if (!options.regexFallback) {
         return { success: false, engine: 'acorn', error: err.toString() };
       }
-      // continue to regex fallback below
     }
   }
 
@@ -259,6 +429,9 @@ export function runScanner(code, opts = {}) {
   const arrows = scanArrowsByRegex(code);
   const globals = scanGlobalsByRegex(code);
   const domIds = scanDomByRegex(code);
+  
+  // Detectar vulnerabilidades por regex
+  const vulnerabilities = options.securityScan ? detectVulnerabilitiesByRegex(code) : [];
 
   const result = {
     classes: classes.map(c => ({ name: c.name, index: c.index })),
@@ -267,10 +440,20 @@ export function runScanner(code, opts = {}) {
     globals: globals.map(g => ({ name: g.name, kind: g.kind, index: g.index })),
     domIds: domIds.map(d => ({ id: d.id, index: d.index })),
     imports: [],
-    exports: []
+    exports: [],
+    vulnerabilities: vulnerabilities
   };
 
-  return { success: true, engine: 'regex', result };
+  return { 
+    success: true, 
+    engine: 'regex', 
+    result,
+    security: {
+      vulnerabilities: vulnerabilities,
+      vulnerabilityCount: vulnerabilities.length,
+      criticalCount: vulnerabilities.filter(v => v.severity === 'CRITICAL').length
+    }
+  };
 }
 
 // Individual exports (useful if you want to split files later)
@@ -279,7 +462,7 @@ export function scanClasses(code, useAst = true) {
   if (useAst && acorn) {
     try {
       const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
-      const c = collectFromAST(ast);
+      const c = collectFromAST(ast, code, { securityScan: false });
       return c.classes || [];
     } catch (e) { /* ignore and fallback */ }
   }
@@ -291,7 +474,7 @@ export function scanFunctions(code, useAst = true) {
   if (useAst && acorn) {
     try {
       const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
-      const c = collectFromAST(ast);
+      const c = collectFromAST(ast, code, { securityScan: false });
       return c.functions || [];
     } catch (e) { /* ignore and fallback */ }
   }
@@ -303,7 +486,7 @@ export function scanGlobals(code, useAst = true) {
   if (useAst && acorn) {
     try {
       const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
-      const c = collectFromAST(ast);
+      const c = collectFromAST(ast, code, { securityScan: false });
       return c.globals || [];
     } catch (e) { /* ignore and fallback */ }
   }
@@ -315,13 +498,69 @@ export function scanDom(code, useAst = true) {
   if (useAst && acorn) {
     try {
       const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
-      const c = collectFromAST(ast);
+      const c = collectFromAST(ast, code, { securityScan: false });
       return c.domIds || [];
     } catch (e) { /* ignore and fallback */ }
   }
   return scanDomByRegex(code);
 }
 
-/* -------------------------
-   END OF FILE
-   ------------------------- */
+// Nova função: Scanner de segurança dedicado
+export function scanSecurity(code) {
+  const vulnerabilities = detectVulnerabilitiesByRegex(code);
+  
+  // Análise adicional de padrões perigosos
+  const dangerousPatterns = [
+    { pattern: /document\.write/, name: 'DOCUMENT_WRITE', severity: 'MEDIUM' },
+    { pattern: /setTimeout\s*\([^,)]*\)/, name: 'DYNAMIC_TIMEOUT', severity: 'MEDIUM' },
+    { pattern: /setInterval\s*\([^,)]*\)/, name: 'DYNAMIC_INTERVAL', severity: 'MEDIUM' },
+    { pattern: /location\s*=/, name: 'LOCATION_REDIRECT', severity: 'MEDIUM' },
+    { pattern: /window\.open/, name: 'WINDOW_OPEN', severity: 'MEDIUM' },
+    { pattern: /postMessage/, name: 'POST_MESSAGE', severity: 'MEDIUM' },
+    { pattern: /localStorage/, name: 'LOCAL_STORAGE', severity: 'LOW' },
+    { pattern: /sessionStorage/, name: 'SESSION_STORAGE', severity: 'LOW' },
+    { pattern: /cookie/, name: 'COOKIE_ACCESS', severity: 'LOW' }
+  ];
+  
+  dangerousPatterns.forEach(pattern => {
+    if (pattern.pattern.test(code)) {
+      vulnerabilities.push({
+        type: pattern.name,
+        severity: pattern.severity,
+        description: `Uso de ${pattern.name.toLowerCase()} detectado`,
+        mitigation: 'Validar e sanitizar entradas/saídas'
+      });
+    }
+  });
+  
+  // Calcular score de segurança (0-100)
+  let score = 100;
+  vulnerabilities.forEach(v => {
+    switch(v.severity) {
+      case 'CRITICAL': score -= 20; break;
+      case 'HIGH': score -= 10; break;
+      case 'MEDIUM': score -= 5; break;
+      case 'LOW': score -= 2; break;
+    }
+  });
+  score = Math.max(0, Math.min(100, score));
+  
+  // Determinar classificação
+  let grade = 'A';
+  if (score >= 90) grade = 'A';
+  else if (score >= 80) grade = 'B';
+  else if (score >= 70) grade = 'C';
+  else if (score >= 60) grade = 'D';
+  else grade = 'F';
+  
+  return {
+    vulnerabilities,
+    score,
+    grade,
+    criticalCount: vulnerabilities.filter(v => v.severity === 'CRITICAL').length,
+    highCount: vulnerabilities.filter(v => v.severity === 'HIGH').length,
+    mediumCount: vulnerabilities.filter(v => v.severity === 'MEDIUM').length,
+    lowCount: vulnerabilities.filter(v => v.severity === 'LOW').length
+  };
+}
+
