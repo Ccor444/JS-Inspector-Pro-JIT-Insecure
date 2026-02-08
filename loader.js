@@ -424,6 +424,193 @@
     }
 
     /* ============================
+       CVE Checker Functions
+       ============================ */
+    async function performCVECheck() {
+        const code = codeEl?.value || '';
+        if (!code.trim()) {
+            alert('Digite algum código JavaScript para verificação de CVEs.');
+            return;
+        }
+
+        const cveBtn = $('btn-cve-check');
+        if (!cveBtn) return;
+        
+        const originalText = showLoading(cveBtn, '🔍 Verificando CVEs...');
+
+        try {
+            // Importar dinamicamente o módulo CVE Checker
+            const { CVE_DATABASE, CVEChecker } = await import('./cve-checker.js');
+            
+            // Criar instância do verificador
+            const cveChecker = new CVEChecker();
+            
+            // Executar verificação
+            const cveResults = cveChecker.scanCodeForCVEs(code);
+            
+            // Exibir resultados
+            displayCVEResults(cveResults);
+            
+            console.info('🔍 CVE scan completed:', cveResults);
+            
+        } catch (error) {
+            console.error('CVE check error:', error);
+            alert(`❌ Erro na verificação de CVEs:\n\n${error.message}`);
+        } finally {
+            hideLoading(cveBtn, originalText);
+        }
+    }
+
+    function displayCVEResults(results) {
+        if (!results || !securityResultsEl) return;
+        
+        const summary = results.summary || {};
+        const vulnerabilities = results.detectedVulnerabilities || [];
+        
+        // Atualizar score de segurança
+        currentSecurityScore = summary.securityScore || 100;
+        
+        // Gerar HTML para exibição
+        let resultsHTML = `
+            <h3 style="margin-top: 0; display: flex; align-items: center; gap: 10px;">
+                🔍 CVE Security Scan Report
+                <span class="google-badge">GOOGLE SECURITY</span>
+            </h3>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0;">
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 15px; text-align: center; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);">
+                    <div style="font-size: 12px; opacity: 0.8;">Security Score</div>
+                    <div style="font-size: 36px; font-weight: bold; color: ${getScoreColor(summary.securityScore || 100)}">
+                        ${summary.securityScore || 100}/100
+                    </div>
+                    <div style="font-size: 14px;">${summary.securityGrade || 'A+'}</div>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 15px; text-align: center; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);">
+                    <div style="font-size: 12px; opacity: 0.8;">Total Vulnerabilities</div>
+                    <div style="font-size: 36px; font-weight: bold; color: ${vulnerabilities.length > 0 ? '#ef4444' : '#10b981'}">
+                        ${vulnerabilities.length}
+                    </div>
+                    <div style="font-size: 14px;">
+                        <span style="color: #ef4444">${summary.critical || 0} Critical</span>
+                        <span style="color: #f59e0b; margin-left: 8px;">${summary.high || 0} High</span>
+                    </div>
+                </div>
+                
+                <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 15px; text-align: center; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);">
+                    <div style="font-size: 12px; opacity: 0.8;">Libraries Found</div>
+                    <div style="font-size: 36px; font-weight: bold; color: #3b82f6">
+                        ${results.importedLibraries?.length || 0}
+                    </div>
+                    <div style="font-size: 14px;">${results.timestamp ? new Date(results.timestamp).toLocaleTimeString() : 'Now'}</div>
+                </div>
+            </div>
+        `;
+        
+        // Se houver vulnerabilidades, mostrar detalhes
+        if (vulnerabilities.length > 0) {
+            resultsHTML += `
+                <h4>⚠️ Vulnerabilidades Detectadas</h4>
+                <div style="max-height: 400px; overflow-y: auto; margin: 15px 0; padding-right: 10px;">
+            `;
+            
+            vulnerabilities.forEach(vuln => {
+                const severityColor = {
+                    'CRITICAL': '#ef4444',
+                    'HIGH': '#f59e0b',
+                    'MEDIUM': '#eab308',
+                    'LOW': '#10b981'
+                }[vuln.severity] || '#94a3b8';
+                
+                resultsHTML += `
+                    <div style="border-left: 4px solid ${severityColor}; margin: 12px 0; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${vuln.cve || vuln.pattern || 'Unknown'}</strong>
+                                <span style="font-size: 11px; color: #94a3b8; margin-left: 8px;">${vuln.type || 'general'}</span>
+                            </div>
+                            <span style="background: ${severityColor}; color: ${vuln.severity === 'MEDIUM' ? '#1f2937' : 'white'}; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: bold;">
+                                ${vuln.severity || 'UNKNOWN'}
+                            </span>
+                        </div>
+                        <div style="margin-top: 8px;">
+                            <div style="font-size: 14px; color: #e2e8f0;">${vuln.name || vuln.description || 'No description'}</div>
+                            ${vuln.library ? `<div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Library: ${vuln.library}</div>` : ''}
+                            ${vuln.affectedVersions ? `<div style="font-size: 12px; color: #fca5a5; margin-top: 4px;">Affected: ${vuln.affectedVersions}</div>` : ''}
+                            ${vuln.mitigation ? `<div style="font-size: 12px; color: #86efac; margin-top: 4px;">✅ Mitigation: ${vuln.mitigation}</div>` : ''}
+                            ${vuln.cvssScore ? `<div style="font-size: 12px; color: #cbd5e1; margin-top: 4px;">CVSS Score: ${vuln.cvssScore}</div>` : ''}
+                            ${vuln.confidence ? `<div style="font-size: 11px; color: #64748b; margin-top: 4px;">Confidence: ${vuln.confidence}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            resultsHTML += '</div>';
+        } else {
+            resultsHTML += `
+                <div style="text-align: center; padding: 40px; color: #10b981;">
+                    <div style="font-size: 48px; margin-bottom: 20px;">✅</div>
+                    <h4 style="margin: 0;">Nenhuma vulnerabilidade CVE encontrada!</h4>
+                    <p style="margin-top: 10px; color: #94a3b8;">Seu código não parece ter vulnerabilidades CVE conhecidas.</p>
+                </div>
+            `;
+        }
+        
+        // Se houver bibliotecas importadas, mostrar lista
+        if (results.importedLibraries?.length > 0) {
+            resultsHTML += `
+                <h4 style="margin-top: 30px;">📦 Bibliotecas Detectadas</h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0;">
+            `;
+            
+            results.importedLibraries.forEach(lib => {
+                resultsHTML += `
+                    <span style="background: rgba(59,130,246,0.2); color: #60a5fa; padding: 6px 12px; border-radius: 20px; font-size: 12px;">
+                        ${lib}
+                    </span>
+                `;
+            });
+            
+            resultsHTML += '</div>';
+        }
+        
+        // Recomendações
+        if (results.recommendations?.length > 0) {
+            resultsHTML += `
+                <h4 style="margin-top: 30px;">🛡️ Recomendações de Segurança</h4>
+                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 12px; margin-top: 15px;">
+            `;
+            
+            results.recommendations.forEach(rec => {
+                resultsHTML += `
+                    <div style="display: flex; align-items: start; gap: 12px; margin-bottom: 12px;">
+                        <div style="color: #3b82f6; font-size: 20px;">${rec.includes('🚨') ? '🚨' : rec.includes('⚠️') ? '⚠️' : '🔍'}</div>
+                        <div style="flex: 1; font-size: 14px;">${rec}</div>
+                    </div>
+                `;
+            });
+            
+            resultsHTML += '</div>';
+        }
+        
+        // Mostrar no painel de segurança
+        securityResultsEl.innerHTML = resultsHTML;
+        
+        // Atualizar estatísticas gerais
+        updateGlobalThreatLevel(currentSecurityScore);
+        
+        // Mostrar alerta se houver vulnerabilidades críticas
+        const criticalCount = summary.critical || 0;
+        if (criticalCount > 0) {
+            alert(`🚨 CVE CRÍTICAS ENCONTRADAS!\n\n${criticalCount} vulnerabilidade(s) CRÍTICA(s) detectada(s)!\n\nScore de segurança: ${summary.securityScore}/100\n\nReveja as recomendações no painel de segurança.`);
+        } else if (vulnerabilities.length > 0) {
+            alert(`⚠️ CVEs Detectadas\n\n${vulnerabilities.length} vulnerabilidade(s) encontrada(s).\n\nScore de segurança: ${summary.securityScore}/100`);
+        } else {
+            alert(`✅ Verificação de CVEs concluída!\n\nScore de segurança: ${summary.securityScore}/100 (${summary.securityGrade})\n\nNenhuma vulnerabilidade CVE conhecida detectada.`);
+        }
+    }
+
+    /* ============================
        Elite Security Functions
        ============================ */
     async function performDeepSecurityScan() {
@@ -773,15 +960,43 @@
     }
 
     /* ============================
-       Helper Functions
+       Helper Functions - CORRIGIDO
        ============================ */
     function safeHighlight(element) {
         try {
-            if (element && typeof hljs !== 'undefined' && hljs.highlightElement) {
-                hljs.highlightElement(element);
+            if (element && typeof hljs !== 'undefined') {
+                // Verificar se é um elemento DOM válido (nodeType === 1)
+                if (element.nodeType && element.nodeType === 1) {
+                    // Verificar se é um elemento <code> ou <pre>
+                    if (element.tagName === 'CODE' || element.tagName === 'PRE') {
+                        if (hljs.highlightElement) {
+                            hljs.highlightElement(element);
+                        }
+                    }
+                }
             }
         } catch (highlightError) {
             console.warn('Highlight failed:', highlightError);
+        }
+    }
+
+    function highlightAllCodeBlocks() {
+        if (typeof hljs === 'undefined') {
+            console.warn('Highlight.js não está disponível');
+            return;
+        }
+        
+        try {
+            // Método mais seguro: highlight apenas os blocos de código específicos
+            document.querySelectorAll('pre code').forEach(codeBlock => {
+                try {
+                    safeHighlight(codeBlock);
+                } catch (error) {
+                    console.warn('Could not highlight code block:', error);
+                }
+            });
+        } catch (error) {
+            console.warn('highlightAllCodeBlocks failed:', error);
         }
     }
 
@@ -1086,9 +1301,7 @@ console.log('Código de exemplo carregado!');`;
         
         const btnCveCheck = $('btn-cve-check');
         if (btnCveCheck) {
-            btnCveCheck.addEventListener('click', () => {
-                alert('🔍 Verificação de CVEs\n\nEsta funcionalidade verificará vulnerabilidades conhecidas em bibliotecas e dependências.\n\nEm desenvolvimento...');
-            });
+            btnCveCheck.addEventListener('click', performCVECheck);
         }
 
         // Close modal when clicking outside
@@ -1136,14 +1349,16 @@ console.log('Código de exemplo carregado!');`;
     }
 
     /* ============================
-       Initialize Application
+       Initialize Application - CORRIGIDO
        ============================ */
     function initApp() {
         // Initialize event listeners
         initAppListeners();
         
-        // Initialize syntax highlighting
-        safeHighlight(document);
+        // Initialize syntax highlighting - CORRIGIDO
+        setTimeout(() => {
+            highlightAllCodeBlocks();
+        }, 100);
         
         // Set initial code example
         if (codeEl && !codeEl.value.trim()) {
@@ -1190,6 +1405,7 @@ document.querySelector(".content");`;
         window.jsInspector = {
             scanAndRender,
             performDeepSecurityScan,
+            performCVECheck,
             runInIframe,
             runEval,
             bindUnsafe,

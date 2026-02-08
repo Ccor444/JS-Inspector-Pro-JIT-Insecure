@@ -33,13 +33,17 @@ export function exportJson(data, filename = 'js_inspector_analysis.json', string
     ? stringifyFn(enhancedData) 
     : JSON.stringify(enhancedData, null, 2);
   
-  // Adicionar marca d'água de segurança
+  // Adicionar marca d'água de segurança - CORRIGIDO
+  const securityScore = securityReport.securityScore || 100;
+  const threatLevel = securityReport.threatLevel || 'UNKNOWN';
+  const criticalCount = securityReport.stats?.critical || 0;
+  
   const watermarkedString = `// ============================================
 // JS INSPECTOR PRO ELITE SECURITY - EXPORT
 // Generated: ${new Date().toISOString()}
-// Security Score: ${securityReport.summary.securityScore}/100
-// Security Level: ${securityReport.summary.securityLevel}
-// Critical Vulnerabilities: ${securityReport.summary.criticalVulnerabilities}
+// Security Score: ${securityScore}/100
+// Security Level: ${threatLevel}
+// Critical Vulnerabilities: ${criticalCount}
 // WARNING: Contains security analysis - Handle with care
 // ============================================\n\n${jsonString}`;
   
@@ -60,19 +64,19 @@ export function exportJson(data, filename = 'js_inspector_analysis.json', string
   }, 1000);
   
   // Log de auditoria
-  logSecurityEvent('export', filename, securityReport.summary.securityLevel);
+  logSecurityEvent('export', filename, threatLevel);
   
   // Feedback ao usuário
-  const threatLevel = getThreatLevel(securityReport.summary.securityScore);
-  if (threatLevel === 'CRITICAL') {
-    alert(`⚠️ EXPORT COMPLETO COM ALERTA DE SEGURANÇA\n\nScore: ${securityReport.summary.securityScore}/100\nNível: ${threatLevel}\n\n${securityReport.summary.criticalVulnerabilities} vulnerabilidades críticas detectadas.`);
+  const threatCategory = getThreatCategory(securityScore);
+  if (threatCategory === 'CRITICAL') {
+    alert(`⚠️ EXPORT COMPLETO COM ALERTA DE SEGURANÇA\n\nScore: ${securityScore}/100\nNível: ${threatCategory}\n\n${criticalCount} vulnerabilidades críticas detectadas.`);
   } else {
-    alert(`✅ Export completed!\nSecurity Score: ${securityReport.summary.securityScore}/100\nLevel: ${threatLevel}`);
+    alert(`✅ Export completed!\nSecurity Score: ${securityScore}/100\nLevel: ${threatCategory}`);
   }
 }
 
 /**
- * Copia JSON com validação de segurança
+ * Copia JSON com validação de segurança - CORRIGIDO
  */
 export function copyJson(data, stringifyFn) {
   if (!data) {
@@ -82,6 +86,13 @@ export function copyJson(data, stringifyFn) {
 
   // Gerar relatório de segurança
   const securityReport = generateSecurityReport(data);
+  
+  // VERIFICAÇÃO CRÍTICA: garantir que securityReport existe
+  if (!securityReport) {
+    console.error('Falha ao gerar relatório de segurança');
+    alert('Erro ao gerar relatório de segurança. Tente novamente.');
+    return;
+  }
   
   // Adicionar aviso de segurança
   const enhancedData = {
@@ -94,24 +105,29 @@ export function copyJson(data, stringifyFn) {
     ? stringifyFn(enhancedData) 
     : JSON.stringify(enhancedData, null, 2);
   
-  // Adicionar marca d'água de segurança
+  // CORREÇÃO: Usar securityReport.securityScore direto
+  const securityScore = securityReport.securityScore || 100;
+  const threatLevel = getThreatCategory(securityScore);
+  const criticalCount = securityReport.stats?.critical || 0;
+  const highCount = securityReport.stats?.high || 0;
+  
+  // Adicionar marca d'água de segurança CORRIGIDA
   const watermarkedString = `// === JS INSPECTOR ELITE SECURITY SCAN ===
 // Scanned: ${new Date().toISOString()}
-// Security Score: ${securityReport.summary.securityScore}/100
-// Security Level: ${securityReport.summary.securityLevel}
-// Critical Vulnerabilities: ${securityReport.summary.criticalVulnerabilities}
-// High Vulnerabilities: ${securityReport.summary.highVulnerabilities}
+// Security Score: ${securityScore}/100
+// Security Level: ${threatLevel}
+// Critical Vulnerabilities: ${criticalCount}
+// High Vulnerabilities: ${highCount}
 // ⚠️  SECURITY WARNING: Handle with extreme care
 // =============================================\n\n${jsonString}`;
   
   navigator.clipboard.writeText(watermarkedString)
     .then(() => {
-      const threatLevel = getThreatLevel(securityReport.summary.securityScore);
       const threatMsg = threatLevel === 'CRITICAL' 
-        ? `🚨 ALERTA CRÍTICO: ${securityReport.summary.criticalVulnerabilities} vulnerabilidades críticas!`
+        ? `🚨 ALERTA CRÍTICO: ${criticalCount} vulnerabilidades críticas!`
         : `Nível de segurança: ${threatLevel}`;
       
-      alert(`✅ Análise copiada para a área de transferência!\n\n${threatMsg}\n\nScore: ${securityReport.summary.securityScore}/100`);
+      alert(`✅ Análise copiada para a área de transferência!\n\n${threatMsg}\n\nScore: ${securityScore}/100`);
     })
     .catch(err => {
       console.error('Erro ao copiar:', err);
@@ -186,7 +202,7 @@ function generateSecurityReport(data) {
   ];
   
   // Converter dados para string para análise
-  const codeString = JSON.stringify(data).toLowerCase();
+  const codeString = data ? JSON.stringify(data).toLowerCase() : '';
   
   // Analisar padrões perigosos
   dangerousPatterns.forEach(pattern => {
@@ -201,7 +217,7 @@ function generateSecurityReport(data) {
   });
   
   // Análise de possíveis XSS
-  if (data.domIds && data.domIds.length > 0) {
+  if (data && data.domIds && data.domIds.length > 0) {
     const domOperations = data.domIds.filter(d => 
       d.id && (d.id.includes('script') || d.id.includes('content') || d.id.includes('html'))
     );
@@ -216,10 +232,10 @@ function generateSecurityReport(data) {
   }
   
   // Análise de variáveis globais perigosas
-  if (data.globals && data.globals.length > 0) {
+  if (data && data.globals && data.globals.length > 0) {
     const dangerousGlobals = data.globals.filter(g => 
-      ['password', 'secret', 'key', 'token', 'auth', 'credential'].some(word => 
-        g.name && g.name.toLowerCase().includes(word)
+      g.name && ['password', 'secret', 'key', 'token', 'auth', 'credential'].some(word => 
+        g.name.toLowerCase().includes(word)
       )
     );
     if (dangerousGlobals.length > 0) {
@@ -233,7 +249,7 @@ function generateSecurityReport(data) {
   }
   
   // Análise de classes perigosas
-  if (data.classes && data.classes.length > 0) {
+  if (data && data.classes && data.classes.length > 0) {
     const dangerousClasses = data.classes.filter(c => 
       c.security && c.security.hasDangerousMethods
     );
@@ -248,7 +264,7 @@ function generateSecurityReport(data) {
   }
   
   // Análise de funções perigosas
-  if (data.execFunctions && data.execFunctions.length > 0) {
+  if (data && data.execFunctions && data.execFunctions.length > 0) {
     const dangerousFunctions = data.execFunctions.filter(f => 
       f.security && f.security.isDangerous
     );
@@ -367,7 +383,7 @@ function getThreatRecommendation(threatName) {
 /**
  * Determinar nível de ameaça baseado no score
  */
-function getThreatLevel(score) {
+function getThreatCategory(score) {
   if (score >= 90) return 'VERY_SECURE';
   if (score >= 70) return 'SECURE';
   if (score >= 50) return 'MODERATE';
@@ -418,7 +434,11 @@ function logSecurityEvent(action, filename, securityLevel) {
  */
 export function exportSecurityHTML(data, filename = 'security_report.html') {
   const securityReport = generateSecurityReport(data);
-  const threatLevel = getThreatLevel(securityReport.securityScore);
+  const threatLevel = getThreatCategory(securityReport.securityScore);
+  const securityScore = securityReport.securityScore || 100;
+  const criticalCount = securityReport.stats?.critical || 0;
+  const highCount = securityReport.stats?.high || 0;
+  const totalThreats = securityReport.stats?.totalThreats || 0;
   
   const html = `
 <!DOCTYPE html>
@@ -585,7 +605,7 @@ export function exportSecurityHTML(data, filename = 'security_report.html') {
             <div class="google-badge">GOOGLE SECURITY DIVISION</div>
             
             <div class="security-score" style="color: ${getThreatColor(threatLevel)}">
-                ${securityReport.securityScore}/100
+                ${securityScore}/100
             </div>
             <div class="grade-badge">
                 ${threatLevel}
@@ -596,19 +616,19 @@ export function exportSecurityHTML(data, filename = 'security_report.html') {
         <div class="stats-grid">
             <div class="stat-card">
                 <h3>Ameaças Totais</h3>
-                <div class="stat-value">${securityReport.stats.totalThreats}</div>
+                <div class="stat-value">${totalThreats}</div>
             </div>
             <div class="stat-card" style="background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);">
                 <h3>Críticas</h3>
-                <div class="stat-value">${securityReport.stats.critical}</div>
+                <div class="stat-value">${criticalCount}</div>
             </div>
             <div class="stat-card" style="background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);">
                 <h3>Altas</h3>
-                <div class="stat-value">${securityReport.stats.high}</div>
+                <div class="stat-value">${highCount}</div>
             </div>
             <div class="stat-card" style="background: linear-gradient(135deg, #5ee7df 0%, #b490ca 100%);">
                 <h3>Segurança</h3>
-                <div class="stat-value">${securityReport.securityScore}%</div>
+                <div class="stat-value">${securityScore}%</div>
             </div>
         </div>
         
@@ -727,12 +747,12 @@ export function exportSecurityCSV(data, filename = 'security_report.csv') {
   
   // Adicionar estatísticas
   csv += `\nSummary,Metric,Value\n`;
-  csv += `Summary,Security Score,${securityReport.securityScore}\n`;
-  csv += `Summary,Threat Level,${securityReport.threatLevel}\n`;
-  csv += `Summary,Total Threats,${securityReport.stats.totalThreats}\n`;
-  csv += `Summary,Critical Threats,${securityReport.stats.critical}\n`;
-  csv += `Summary,High Threats,${securityReport.stats.high}\n`;
-  csv += `Summary,Timestamp,${securityReport.scanTimestamp}\n`;
+  csv += `Summary,Security Score,${securityReport.securityScore || 100}\n`;
+  csv += `Summary,Threat Level,${securityReport.threatLevel || 'UNKNOWN'}\n`;
+  csv += `Summary,Total Threats,${securityReport.stats?.totalThreats || 0}\n`;
+  csv += `Summary,Critical Threats,${securityReport.stats?.critical || 0}\n`;
+  csv += `Summary,High Threats,${securityReport.stats?.high || 0}\n`;
+  csv += `Summary,Timestamp,${securityReport.scanTimestamp || new Date().toISOString()}\n`;
   
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
